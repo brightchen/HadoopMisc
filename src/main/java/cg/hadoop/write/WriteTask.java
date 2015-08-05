@@ -4,7 +4,6 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,26 +22,32 @@ public abstract class WriteTask implements Runnable {
     int wroteSize = 0;
     boolean success = false;
    
-    lock.lock();
-    
-    try {
-      while( data==null || length <= 0 )
-        writing.await();
-      write(data, start, length);
-      success = true;
-      wroteSize = length;
-    } catch (InterruptedException e) {
-      success = false;
-      logger.warn(e.getMessage());
-    } catch (Exception e) {
-      success = false;
-      logger.error(e.getMessage());
-    } finally {
-      lock.unlock();
-      writeDone( success );
+    while(true)
+    {
+      lock.lock();
+      
+      try {
+        while( data==null || length <= 0 )
+          writing.await();
+        logger.debug("writting data. data: {}", System.identityHashCode(data));
+        write(data, start, length);
+        success = true;
+        wroteSize = length;
+        data = null;
+        length = 0;
+      } catch (InterruptedException e) {
+        success = false;
+        logger.warn(e.getMessage());
+      } catch (Exception e) {
+        success = false;
+        logger.error(e.getMessage());
+      } finally {
+        lock.unlock();
+        writeDone( success );
+      }
+      
+      logger.debug("wrote size: {}", wroteSize);
     }
-    
-    logger.debug("wrote size: {}", wroteSize);
   }
 
   protected abstract void write(byte[] data, int start, int length) throws Exception;
@@ -57,6 +62,7 @@ public abstract class WriteTask implements Runnable {
     this.data = data;
     this.start = start;
     this.length = length;
+    logger.debug("data ready for writting. data: {}", System.identityHashCode(data));
     writing.signal();
     lock.unlock();
   }

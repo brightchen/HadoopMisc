@@ -14,6 +14,7 @@ public class BlockWriter  implements Writer{
     public WriteTaskWrapper( WriteTask writeTask, BlockWriter writer )
     {
       this.writeTask = writeTask;
+      this.writer = writer;
     }
     @Override
     protected void write(byte[] data, int start, int length) throws Exception {
@@ -22,6 +23,7 @@ public class BlockWriter  implements Writer{
     
     @Override
     protected void writeDone(boolean success) {
+      logger.debug("releasing a permit. available permits:{}", writer.availableBlocks.availablePermits());
       writer.availableBlocks.release();
     }
   }
@@ -70,15 +72,16 @@ public class BlockWriter  implements Writer{
   }
   
   
-  public BlockWriter(int blockSize, WriteToFileTask fsSaver)
+  public BlockWriter(int blockSize, WriteToFileTask writeTask)
   {
     this(blockSize);
-    setWriteTask(fsSaver);
+    setWriteTask(writeTask);
   }
 
   public void write(byte[] data, int start, int length) {
     if (currentBufOffset + length > blockSize) {
       try {
+        logger.debug("getting permit. available permits:{}", availableBlocks.availablePermits());
         availableBlocks.acquire();
       } catch (InterruptedException e) {
         logger.warn(e.getMessage());
@@ -133,5 +136,11 @@ public class BlockWriter  implements Writer{
     this.writeTask = new WriteTaskWrapper( writeTask, this );
   }
   
-  
+  /**'
+   * method to cleanup the resource
+   */
+  public void cleanup()
+  {
+    
+  }
 }

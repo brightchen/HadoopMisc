@@ -1,30 +1,53 @@
 package cg.hadoop.write;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class BlockWriter  implements Writer{
   
-  public static class WriteTaskWrapper extends WriteTask
+  protected static class WriteTaskWrapper extends WriteTask
   {
     private WriteTask writeTask;
     private BlockWriter writer;
+    private volatile long totalWroteLength = 0;
     public WriteTaskWrapper( WriteTask writeTask, BlockWriter writer )
     {
       this.writeTask = writeTask;
       this.writer = writer;
+      startWriteThread();
     }
+    
     @Override
     protected void write(byte[] data, int start, int length) throws Exception {
       writeTask.write(data, start, length);
     }
     
     @Override
-    protected void writeDone(boolean success) {
-      logger.debug("releasing a permit. available permits:{}", writer.availableBlocks.availablePermits());
+    public void flush()
+    {
+      writeTask.flush();
+    }
+    
+    @Override
+    protected void writeDone(byte[] data, boolean success, int wroteSize) {
+      totalWroteLength += wroteSize;
       writer.availableBlocks.release();
+      if(logger.isDebugEnabled())
+        logger.debug("just released a permit. available permits: {}", writer.availableBlocks.availablePermits());
+
+      logger.debug("flushDoneLatch: {}, data: {}, writer.currentBuf: {}", System.identityHashCode(writer.flushDoneLatch), System.identityHashCode(data), System.identityHashCode(writer.currentBuf) );
+      if( writer.flushDoneLatch != null && data == writer.currentBuf )
+      {
+        writer.flushDoneLatch.countDown();
+        if(logger.isDebugEnabled())
+          logger.debug("flushDoneLatch countDown()");
+      }
+    
     }
   }
   
@@ -40,9 +63,11 @@ public class BlockWriter  implements Writer{
   private byte[] buf2;
   private byte[] currentBuf;
   private int currentBufOffset;
-
+  final private Lock bufferLock = new ReentrantLock();
+  
   private WriteTaskWrapper writeTask;
-  private Thread saverThread;
+  
+  private volatile CountDownLatch flushDoneLatch;
   
   public BlockWriter()
   {
@@ -55,7 +80,7 @@ public class BlockWriter  implements Writer{
     buf1 = new byte[blockSize];
     buf2 = new byte[blockSize];
     
-    currentBuf = buf1;
+    currentBuf = null;
     currentBufOffset = 0;
   }
   
@@ -78,20 +103,36 @@ public class BlockWriter  implements Writer{
     setWriteTask(writeTask);
   }
 
+  /**
+   * When the buffer going to overflow or flush is called, switch to another buffer for writing and send writeTask to write
+   * @return
+   */
   public void write(byte[] data, int start, int length) {
-    if (currentBufOffset + length > blockSize) {
-      try {
-        logger.debug("getting permit. available permits:{}", availableBlocks.availablePermits());
-        availableBlocks.acquire();
-      } catch (InterruptedException e) {
-        logger.warn(e.getMessage());
+    byte[] oldBuffer = null;
+    int oldBufferLength = 0;
+    
+    {
+      bufferLock.lock();
+      if (currentBuf==null || currentBufOffset + length > blockSize) {
+        try {
+          if(logger.isDebugEnabled())
+            logger.debug("Going to acquire a permit. available permits: {}", availableBlocks.availablePermits());
+          availableBlocks.acquire();
+        } catch (InterruptedException e) {
+          logger.warn(e.getMessage());
+        }
+        oldBufferLength = currentBufOffset;
+        oldBuffer = flipCurrentBuffer();
+        
       }
-      saveData(currentBuf);
-      flipCurrentBuffer();
-      currentBufOffset = 0;
+      bufferLock.unlock();
     }
+    
+    if( oldBuffer != null )
+      saveData(oldBuffer, oldBufferLength);
     copyDataToBuffer(data, start, length);
   }
+  
   
   @Override
   public void write(byte[] data)
@@ -109,27 +150,96 @@ public class BlockWriter  implements Writer{
     }
   }
   
-  //flip current os, and return old current os
+  //flip current buffer, and return buffer
   protected final byte[] flipCurrentBuffer()
   {
     byte[] returnBuf = currentBuf;
     currentBuf = ( currentBuf == buf1 ) ? buf2 : buf1;
+    currentBufOffset = 0;
     return returnBuf;
   }
   
+  /**
+   * - when flush() in block mode, all write should be blocked until flush done.
+   * - when multiple threads call flush() in block mode at some time. all thread will be blocked until flush done.
+   * - when multiple threads call flush() both in block and non-lock mode, the the non-block mode will return immediately 
+   *   while block mode should be blocked
+   */
   public void flush( boolean block ) {
-    saveData(currentBuf);
-    if( !block )
+    logger.debug("====flush() enterning.");
+    
+    bufferLock.lock();
+    logger.debug("====flush() got lock.");
+    if (currentBuf == null || currentBufOffset <= 0)
+    {
+      bufferLock.unlock();
       return;
+    }
+    
+    //non-block
+    if(!block)
+    {
+      byte[] oldBuffer = null;
+      int oldBufferSize = 0;
+      
+      try {
+        if(logger.isDebugEnabled())
+          logger.debug("Going to acquire a permit. available permits: {}", availableBlocks.availablePermits());
+        availableBlocks.acquire();
+      } catch (InterruptedException e) {
+        logger.warn(e.getMessage());
+      }
+      oldBufferSize = currentBufOffset;
+      oldBuffer = flipCurrentBuffer();
+      
+      bufferLock.unlock();
+      
+      if (oldBuffer != null && oldBufferSize > 0)
+        saveData(oldBuffer, oldBufferSize);
+      return;
+    }
+
+    //block
+    //get all permits avoid get other block for writing
+//    final int availablePermits = availableBlocks.availablePermits();
+//    if(availablePermits > 0)
+//    {
+//      if(logger.isDebugEnabled())
+//        logger.debug("Availabe permits: {}. acquire all of them.", availablePermits);
+//      try {
+//        availableBlocks.acquire(availablePermits);
+//      } catch (InterruptedException ie) {
+//        logger.warn(ie.getMessage());
+//      }
+//    }
+    
+    flushDoneLatch = new CountDownLatch(1);
+    saveData(currentBuf, currentBufOffset);
+    logger.debug("====flush() saved Data.");
+    //reuse currentBuf as current buffer
+    currentBufOffset = 0;
+
+    try {
+      //waiting for write done.
+      logger.debug("====flush() wait for latch.");
+      flushDoneLatch.await();
+      
+      //all cached data should wrote. flush now
+      writeTask.flush();
+      
+      logger.debug("====flush() got latch.");
+      
+    } catch (InterruptedException e) {
+      logger.warn("flushDoneLatch await() exception.", e.getMessage());
+    }
+    bufferLock.unlock();
+    
+    logger.debug("====flush() done.");
   }
 
-  protected void saveData( byte[] data )
+  protected void saveData( byte[] data, int dataLength )
   {
-    if(saverThread == null){
-      saverThread = new Thread(writeTask);
-      saverThread.start();
-    }
-    writeTask.setData(data, 0, currentBufOffset);
+    writeTask.setData(data, 0, dataLength);
   }
 
   public void setWriteTask(WriteTask writeTask) {
@@ -141,6 +251,11 @@ public class BlockWriter  implements Writer{
    */
   public void cleanup()
   {
-    
+    writeTask.cleanup();
+  }
+  
+  public long getTotalWroteLength()
+  {
+    return writeTask.totalWroteLength;
   }
 }

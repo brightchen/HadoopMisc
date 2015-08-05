@@ -14,14 +14,15 @@ public class WriteToFileTask extends WriteTask
   private static final Logger logger = LoggerFactory.getLogger(WriteToFileTask.class);
   
   final private Configuration conf = new Configuration();
+  private FileSystem fileSystem;
   private FSDataOutputStream fsOutStream;
 
   public WriteToFileTask( String fileName )
   {
     Path filePath = new Path(fileName);
     try {
-      FileSystem fs = FileSystem.get(conf);
-      fsOutStream = fs.create(filePath);
+      fileSystem = FileSystem.get(conf);
+      fsOutStream = fileSystem.create(filePath);
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -31,9 +32,26 @@ public class WriteToFileTask extends WriteTask
   protected void write( byte[] data, int start, int length ) throws IOException
   {
     fsOutStream.write(data, start, length);
+    flush();
   }
   
   @Override
-  protected void writeDone(boolean success){}
+  public void flush()
+  {
+    try {
+      fsOutStream.flush();
+    } catch (IOException e) {
+      logger.debug(e.getMessage());
+    }
+  }
   
+  @Override
+  public void cleanup() {
+    flush();
+    try {
+      fileSystem.close();
+    } catch (IOException e) {
+      logger.warn(e.getMessage());
+    }
+  }
 }

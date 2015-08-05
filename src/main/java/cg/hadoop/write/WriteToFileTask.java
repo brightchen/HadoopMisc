@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory;
 
 public class WriteToFileTask extends WriteTask
 {
-  private static final Logger LOG = LoggerFactory.getLogger(WriteToFileTask.class);
+  private static final Logger logger = LoggerFactory.getLogger(WriteToFileTask.class);
   
   final private Configuration conf = new Configuration();
   private FSDataOutputStream fsOutStream;
@@ -27,9 +27,13 @@ public class WriteToFileTask extends WriteTask
     }
   }
   
+  @Override
   protected void write( byte[] data, int start, int length ) throws IOException
   {
     fsOutStream.write(data, start, length);
   }
+  
+  @Override
+  protected void writeDone(boolean success){}
   
 }

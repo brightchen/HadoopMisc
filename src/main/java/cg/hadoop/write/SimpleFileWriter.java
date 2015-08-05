@@ -42,14 +42,14 @@ public class SimpleFileWriter implements Writer{
     try {
       fos.write(data, start, length);
       //flush each time
-      flush();
+      flush(true);
     } catch (IOException e) {
       e.printStackTrace();
     }
   }
 
   @Override
-  public void flush() {
+  public void flush( boolean block ) {
     if(fos==null)
       return;
     

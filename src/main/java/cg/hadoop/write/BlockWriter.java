@@ -1,7 +1,37 @@
 package cg.hadoop.write;
 
+import java.util.concurrent.Semaphore;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class BlockWriter  implements Writer{
+  
+  public static class WriteTaskWrapper extends WriteTask
+  {
+    private WriteTask writeTask;
+    private BlockWriter writer;
+    public WriteTaskWrapper( WriteTask writeTask, BlockWriter writer )
+    {
+      this.writeTask = writeTask;
+    }
+    @Override
+    protected void write(byte[] data, int start, int length) throws Exception {
+      writeTask.write(data, start, length);
+    }
+    
+    @Override
+    protected void writeDone(boolean success) {
+      writer.availableBlocks.release();
+    }
+  }
+  
+  
+  private static final Logger logger = LoggerFactory.getLogger( BlockWriter.class );
+      
   public static final int BLOCK_SIZE = 1024*1024;  //1M
+  
+  private final Semaphore availableBlocks = new Semaphore(2, true);
   
   private int blockSize = BLOCK_SIZE;
   private byte[] buf1;
@@ -9,7 +39,7 @@ public class BlockWriter  implements Writer{
   private byte[] currentBuf;
   private int currentBufOffset;
 
-  private WriteTask writeTask;
+  private WriteTaskWrapper writeTask;
   private Thread saverThread;
   
   public BlockWriter()
@@ -45,14 +75,17 @@ public class BlockWriter  implements Writer{
     this(blockSize);
     setWriteTask(fsSaver);
   }
-  
+
   public void write(byte[] data, int start, int length) {
-    if( currentBufOffset + length > blockSize )
-    {
-      //should change os
-      saveData( currentBuf );
+    if (currentBufOffset + length > blockSize) {
+      try {
+        availableBlocks.acquire();
+      } catch (InterruptedException e) {
+        logger.warn(e.getMessage());
+      }
+      saveData(currentBuf);
       flipCurrentBuffer();
-      currentBufOffset=0;
+      currentBufOffset = 0;
     }
     copyDataToBuffer(data, start, length);
   }
@@ -81,9 +114,10 @@ public class BlockWriter  implements Writer{
     return returnBuf;
   }
   
-  public void flush() {
+  public void flush( boolean block ) {
     saveData(currentBuf);
-    
+    if( !block )
+      return;
   }
 
   protected void saveData( byte[] data )
@@ -96,7 +130,7 @@ public class BlockWriter  implements Writer{
   }
 
   public void setWriteTask(WriteTask writeTask) {
-    this.writeTask = writeTask;
+    this.writeTask = new WriteTaskWrapper( writeTask, this );
   }
   
   

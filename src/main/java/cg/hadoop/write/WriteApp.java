@@ -6,7 +6,7 @@ public class WriteApp {
   
   public static void main(String[] argvs)
   {
-    BlockWriter writer = new BlockWriter( 10240, new WriteToFileTask(filePath) );
+    BlockWriter writer = new BlockWriter( 1024, new WriteToFileTask(filePath) );
     
     byte[] data = "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890000000000".getBytes();
     for( int i=0; i<count; ++i )
@@ -14,6 +14,6 @@ public class WriteApp {
       writer.write( String.format("%4d", i).getBytes() );
       writer.write( data );
     }
-    writer.flush();
+    writer.flush(true);
   }
 }

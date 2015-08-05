@@ -8,36 +8,51 @@ import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public abstract class WriteTask implements Runnable{
+public abstract class WriteTask implements Runnable {
   private static final Logger logger = LoggerFactory.getLogger(WriteTask.class);
-  
+
   final private Lock lock = new ReentrantLock();
-  final private Condition writing  = lock.newCondition(); 
-  
+  final private Condition writing = lock.newCondition();
+
   private byte[] data;
   private int start;
   private int length;
-  
+
   @Override
   public void run() {
+    int wroteSize = 0;
+    boolean success = false;
+   
+    lock.lock();
+    
     try {
-      lock.lock();
-      writing.await();
-      lock.unlock();
-      logger.debug("writing data: size: ", data.length);
+      while( data==null || length <= 0 )
+        writing.await();
       write(data, start, length);
+      success = true;
+      wroteSize = length;
     } catch (InterruptedException e) {
-      e.printStackTrace();
-      lock.unlock();
+      success = false;
+      logger.warn(e.getMessage());
     } catch (Exception e) {
-      e.printStackTrace();
+      success = false;
+      logger.error(e.getMessage());
+    } finally {
+      lock.unlock();
+      writeDone( success );
     }
+    
+    logger.debug("wrote size: {}", wroteSize);
   }
-  
-  protected abstract void write( byte[] data, int start, int length ) throws Exception;
-  
-  public void setData( byte[] data, int start, int length )
-  {
+
+  protected abstract void write(byte[] data, int start, int length) throws Exception;
+
+  protected abstract void writeDone(boolean success);
+
+  public void setData(byte[] data, int start, int length) {
+    if (data == null || length <= 0)
+      return;
+
     lock.lock();
     this.data = data;
     this.start = start;

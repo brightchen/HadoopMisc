@@ -10,7 +10,7 @@ public class WriteApp implements Runnable {
   private static final Logger logger = LoggerFactory.getLogger(WriteApp.class);
   
   public static final String filePath = "/tmp/WriteApp.out";
-  public final static int count = 100000;
+  public final static int count = 1000;
   public static int theadNum = 10;
   public static Thread[] threads = new Thread[theadNum];
   
@@ -55,7 +55,7 @@ public class WriteApp implements Runnable {
       }
     }
     try {
-      Thread.sleep(1000);
+      Thread.sleep(100);
     } catch (InterruptedException e) {
       e.printStackTrace();
     }

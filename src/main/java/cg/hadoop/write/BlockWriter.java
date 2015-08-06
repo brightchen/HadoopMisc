@@ -8,6 +8,12 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Probably it's better to use Future to save the content to simplify the concurrency control
+ * 
+ * @author bright
+ *
+ */
 public class BlockWriter  implements Writer{
   
   protected static class WriteTaskWrapper extends WriteTask
@@ -111,9 +117,11 @@ public class BlockWriter  implements Writer{
     bufferLock.lock();
     if (currentBuf==null || currentBufOffset + length > blockSize) {
       try {
-        if(logger.isDebugEnabled())
-          logger.debug("Going to acquire a permit. available permits: {}", availableBlocks.availablePermits());
+//        if(logger.isDebugEnabled())
+//          logger.debug("Going to acquire a permit. available permits: {}", availableBlocks.availablePermits());
         availableBlocks.acquire();
+        if(logger.isDebugEnabled())
+          logger.debug("just acquired a permit. available permits: {}", availableBlocks.availablePermits());
       } catch (InterruptedException e) {
         logger.warn(e.getMessage());
       }
@@ -208,15 +216,22 @@ public class BlockWriter  implements Writer{
     
     flushDoneLatch = new CountDownLatch(1);
     saveData(currentBuf, currentBufOffset);
-    //reuse currentBuf as current buffer
-    currentBufOffset = 0;
+    
 
     try {
       //waiting for write done.
       flushDoneLatch.await();
       
+      //reuse currentBuf as current buffer
+      availableBlocks.acquire();
+      currentBufOffset = 0;
+      
+      if(logger.isDebugEnabled())
+        logger.debug("available permits after flush: {}", availableBlocks.availablePermits());
+      
       //all cached data should wrote. flush now
       writeTask.flush();
+      
       
     } catch (InterruptedException e) {
       logger.warn("flushDoneLatch await() exception.", e.getMessage());

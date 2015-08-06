@@ -18,7 +18,7 @@ public abstract class WriteTask implements Runnable {
   private final Lock closeLock = new ReentrantLock();
   private final Condition closed = closeLock.newCondition();
   
-  private final int timeOut = 1000;
+  private final int timeOut = 100;
   
   private byte[] data;
   private int start;
